@@ -1,0 +1,86 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" version="29.6.4">
+  <diagram name="Message flow" id="message-flow">
+    <mxGraphModel dx="1061" dy="629" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="broker-bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;dashed=1;dashPattern=8 8;arcSize=6;" value="" vertex="1">
+          <mxGeometry height="420" width="820" x="100" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="broker-title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontStyle=1;fontSize=14;fontColor=#333333;" value="Брокер broker-message" vertex="1">
+          <mxGeometry height="24" width="320" x="120" y="92" as="geometry" />
+        </mxCell>
+        <mxCell id="kernel" parent="1" style="swimlane;horizontal=1;startSize=32;fillColor=#fff9e6;strokeColor=#d6b656;fontStyle=1;fontSize=13;childLayout=stackLayout;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;" value="Ядро брокера (логика + буфер RAM)" vertex="1">
+          <mxGeometry height="200" width="280" x="360" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="core-logic" parent="kernel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;align=center;verticalAlign=middle;" value="Маршрутизация, топики, очереди, FIFO" vertex="1">
+          <mxGeometry height="52" width="240" x="20" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="ram" parent="kernel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;align=center;verticalAlign=middle;fontStyle=2;" value="Буфер RAM (часть ядра)" vertex="1">
+          <mxGeometry height="48" width="240" x="20" y="118" as="geometry" />
+        </mxCell>
+        <mxCell id="e-use-ram" edge="1" parent="kernel" source="core-logic" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#2d7600;endArrow=classic;endFill=1;fontSize=11;fontColor=#2d7600;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="ram" value="запись в буфер">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pub" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Publishers" vertex="1">
+          <mxGeometry height="50" width="110" x="40" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="mqtt" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;align=center;verticalAlign=middle;" value="MQTT адаптер" vertex="1">
+          <mxGeometry height="50" width="120" x="200" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="sub" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;" value="Subscribers" vertex="1">
+          <mxGeometry height="50" width="110" x="800" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="badger" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;align=center;verticalAlign=middle;" value="Badger (диск)" vertex="1">
+          <mxGeometry height="48" width="120" x="540" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="api" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;align=center;verticalAlign=middle;" value="Админ / метрики / Web UI" vertex="1">
+          <mxGeometry height="48" width="140" x="680" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="pub" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#333333;endArrow=classic;endFill=1;fontSize=11;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="mqtt" value="PUBLISH">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="mqtt" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#333333;endArrow=classic;endFill=1;fontSize=11;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="core-logic" value="в ядро">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="ram" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#0066CC;endArrow=classic;endFill=1;fontSize=11;fontColor=#0066CC;exitX=0;exitY=0.5;" value="DELIVER (из буфера)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="380" y="290" />
+              <mxPoint x="260" y="290" />
+            </Array>
+            <mxPoint x="260" y="250" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="mqtt" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#0066CC;endArrow=classic;endFill=1;fontSize=11;fontColor=#0066CC;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="sub" value="сообщения">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="500" y="170" />
+              <mxPoint x="855" y="170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="core-logic" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#6c3483;endArrow=classic;endFill=1;fontSize=11;fontColor=#6c3483;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="badger" value="persist">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="620" y="240" />
+              <mxPoint x="620" y="330" />
+              <mxPoint x="600" y="330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="core-logic" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#b85450;endArrow=classic;endFill=1;fontSize=11;fontColor=#b85450;exitX=1;exitY=0.5;entryX=0.5;entryY=0;" target="api" value="метрики">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="630" y="224" />
+              <mxPoint x="630" y="330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=11;fontColor=#666666;" value="Буфер RAM входит в ядро: логика пишет в буфер и при доставке читает из него; в адаптер MQTT сообщения уходят из буфера (DELIVER). Badger — персистентность с ядра (логики)." vertex="1">
+          <mxGeometry height="48" width="880" x="40" y="520" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
