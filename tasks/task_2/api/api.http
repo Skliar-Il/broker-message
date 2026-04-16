@@ -1,0 +1,47 @@
+### Health
+GET http://localhost:8080/health
+
+### Swagger UI (открыть в браузере)
+# http://localhost:8080/swagger/index.html
+
+### Swagger JSON
+GET http://localhost:8080/swagger/doc.json
+
+###
+### Сценарий 1: заказ (транзакция — order + items + total)
+POST http://localhost:8080/api/v1/orders
+Content-Type: application/json
+
+{
+  "customer_id": 1,
+  "items": [
+    { "product_id": 1, "quantity": 1 },
+    { "product_id": 2, "quantity": 2 }
+  ]
+}
+
+###
+### Сценарий 2: атомарное обновление email
+PATCH http://localhost:8080/api/v1/customers/1/email
+Content-Type: application/json
+
+{
+  "email": "new.ivan@example.com"
+}
+
+###
+### Сценарий 3: новый продукт (атомарная вставка)
+POST http://localhost:8080/api/v1/products
+Content-Type: application/json
+
+{
+  "product_name": "Монитор 27\"",
+  "price": 25000.00
+}
+
+###
+### Справочно: клиенты и товары (после миграций с seed)
+GET http://localhost:8080/api/v1/customers
+
+###
+GET http://localhost:8080/api/v1/products

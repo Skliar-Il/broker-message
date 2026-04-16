@@ -1,0 +1,188 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Online Store Transactions API",
+    "description": "Практика Пр5: три сценария с транзакциями PostgreSQL (pgx), миграции Goose.",
+    "version": "1.0"
+  },
+  "host": "localhost:8080",
+  "basePath": "/",
+  "schemes": ["http"],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    },
+    "/api/v1/orders": {
+      "post": {
+        "tags": ["orders"],
+        "summary": "Сценарий 1: размещение заказа (транзакция)",
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": { "$ref": "#/definitions/placeOrderReq" }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": { "$ref": "#/definitions/placeOrderRes" }
+          },
+          "400": { "description": "Bad request" }
+        }
+      }
+    },
+    "/api/v1/customers/{id}/email": {
+      "patch": {
+        "tags": ["customers"],
+        "summary": "Сценарий 2: атомарное обновление email",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": { "$ref": "#/definitions/patchEmailReq" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "No content" },
+          "400": { "description": "Bad request" }
+        }
+      }
+    },
+    "/api/v1/products": {
+      "get": {
+        "tags": ["products"],
+        "summary": "Список товаров",
+        "produces": ["application/json"],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/productRow" }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["products"],
+        "summary": "Сценарий 3: атомарное добавление продукта",
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": { "$ref": "#/definitions/newProduct" }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": { "$ref": "#/definitions/productCreated" }
+          },
+          "400": { "description": "Bad request" }
+        }
+      }
+    },
+    "/api/v1/customers": {
+      "get": {
+        "tags": ["customers"],
+        "summary": "Список клиентов",
+        "produces": ["application/json"],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/customerRow" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "placeOrderReq": {
+      "type": "object",
+      "required": ["customer_id", "items"],
+      "properties": {
+        "customer_id": { "type": "integer", "format": "int32" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "product_id": { "type": "integer", "format": "int32" },
+              "quantity": { "type": "integer", "format": "int32" }
+            }
+          }
+        }
+      }
+    },
+    "placeOrderRes": {
+      "type": "object",
+      "properties": {
+        "order_id": { "type": "integer", "format": "int32" },
+        "total_amount": { "type": "number", "format": "double" },
+        "customer_id": { "type": "integer", "format": "int32" }
+      }
+    },
+    "patchEmailReq": {
+      "type": "object",
+      "required": ["email"],
+      "properties": {
+        "email": { "type": "string" }
+      }
+    },
+    "newProduct": {
+      "type": "object",
+      "required": ["product_name", "price"],
+      "properties": {
+        "product_name": { "type": "string" },
+        "price": { "type": "number", "format": "double" }
+      }
+    },
+    "productCreated": {
+      "type": "object",
+      "properties": {
+        "product_id": { "type": "integer", "format": "int32" },
+        "product_name": { "type": "string" },
+        "price": { "type": "number", "format": "double" }
+      }
+    },
+    "customerRow": {
+      "type": "object",
+      "properties": {
+        "customer_id": { "type": "integer", "format": "int32" },
+        "first_name": { "type": "string" },
+        "last_name": { "type": "string" },
+        "email": { "type": "string" }
+      }
+    },
+    "productRow": {
+      "type": "object",
+      "properties": {
+        "product_id": { "type": "integer", "format": "int32" },
+        "product_name": { "type": "string" },
+        "price": { "type": "number", "format": "double" }
+      }
+    }
+  }
+}

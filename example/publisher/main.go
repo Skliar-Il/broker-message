@@ -10,7 +10,7 @@ import (
 
 const (
 	brokerAddr = "localhost:1883"
-	topicName  = "demo/hello"
+	topicName  = "hello"
 )
 
 func main() {
