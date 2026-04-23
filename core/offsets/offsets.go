@@ -13,23 +13,17 @@ import (
 const offsetKeyPrefix = "offset:"
 
 type Offsets struct {
-	mu             sync.Mutex
-	offsets        map[string]uint64
-	pendingWrites  uint64
-	flushThreshold uint64
-	log            zerolog.Logger
-	db             *storage.Badger
+	mu      sync.Mutex
+	offsets map[string]uint64
+	db      *storage.Badger
+	log     zerolog.Logger
 }
 
-func NewOffsets(db *storage.Badger, flushThreshold uint64, log zerolog.Logger) *Offsets {
-	if flushThreshold == 0 {
-		flushThreshold = 10
-	}
+func NewOffsets(db *storage.Badger, log zerolog.Logger) *Offsets {
 	return &Offsets{
-		offsets:        make(map[string]uint64),
-		db:             db,
-		flushThreshold: flushThreshold,
-		log:            log.With().Str("component", "offsets").Logger(),
+		offsets: make(map[string]uint64),
+		db:      db,
+		log:     log.With().Str("component", "offsets").Logger(),
 	}
 }
 
@@ -59,47 +53,35 @@ func (o *Offsets) Get(groupID string) uint64 {
 func (o *Offsets) Set(groupID string, offset uint64) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.offsets[buildKey(groupID)] = offset
-	o.maybeFlush()
+	key := buildKey(groupID)
+	o.offsets[key] = offset
+	if err := o.persist(key, offset); err != nil {
+		o.log.Error().Err(err).Str("key", key).Msg("offsets: persist set failed")
+	}
 }
 
 func (o *Offsets) Inc(groupID string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.offsets[buildKey(groupID)]++
-	o.maybeFlush()
+	key := buildKey(groupID)
+	o.offsets[key]++
+	if err := o.persist(key, o.offsets[key]); err != nil {
+		o.log.Error().Err(err).Str("key", key).Msg("offsets: persist inc failed")
+	}
 }
 
 func (o *Offsets) Delete(groupID string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	delete(o.offsets, buildKey(groupID))
-	o.maybeFlush()
-}
-
-func (o *Offsets) Flush() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.flush()
-}
-
-func (o *Offsets) maybeFlush() {
-	o.pendingWrites++
-	if o.pendingWrites >= o.flushThreshold {
-		if err := o.flush(); err != nil {
-			o.log.Error().Err(err).Msg("auto-flush failed")
-		}
-		o.pendingWrites = 0
+	key := buildKey(groupID)
+	delete(o.offsets, key)
+	if err := o.db.Delete([]byte(key)); err != nil {
+		o.log.Error().Err(err).Str("key", key).Msg("offsets: persist delete failed")
 	}
 }
 
-func (o *Offsets) flush() error {
+func (o *Offsets) persist(key string, val uint64) error {
 	buf := make([]byte, 8)
-	for key, val := range o.offsets {
-		binary.BigEndian.PutUint64(buf, val)
-		if err := o.db.Set([]byte(key), buf); err != nil {
-			return errors.Wrap(err, "flush offset key")
-		}
-	}
-	return nil
+	binary.BigEndian.PutUint64(buf, val)
+	return errors.Wrap(o.db.Set([]byte(key), buf), "offsets: set key")
 }

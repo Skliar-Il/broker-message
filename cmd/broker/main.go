@@ -25,7 +25,15 @@ func main() {
 	log.Info().Msg("broker: starting")
 
 	baseDir := filepath.Join(".", topicsDir)
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		log.Fatal().Err(err).Str("dir", baseDir).Msg("broker: create topics dir failed")
+	}
+
 	registry := mqtt.NewRegistry(baseDir, log)
+	if err := registry.Load(); err != nil {
+		log.Fatal().Err(err).Msg("broker: preload topics failed")
+	}
+
 	defer func() {
 		log.Info().Msg("broker: shutting down, closing all topics")
 		if err := registry.Close(); err != nil {

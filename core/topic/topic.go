@@ -16,8 +16,8 @@ import (
 const (
 	msgKeyPrefix = "msg:"
 	seqKey       = "meta:seq"
+	nameKey      = "meta:topic_name"
 	subChanSize  = 256
-	flushEvery   = 10
 )
 
 type Message struct {
@@ -46,8 +46,31 @@ func New(name string, dataDir string, log zerolog.Logger) (*Topic, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "topic %q: open storage", name)
 	}
+	return newFromDB(name, db, log, true)
+}
 
-	offs := offsets.NewOffsets(db, flushEvery, log)
+func LoadFromDir(dataDir string, log zerolog.Logger) (*Topic, error) {
+	db, err := storage.OpenBadger(dataDir)
+	if err != nil {
+		return nil, errors.Wrapf(err, "topic: open storage %q", dataDir)
+	}
+	stored, err := db.Get([]byte(nameKey))
+	if err != nil {
+		_ = db.Close()
+		return nil, errors.Wrapf(err, "topic: read name from %q", dataDir)
+	}
+	return newFromDB(string(stored), db, log, false)
+}
+
+func newFromDB(name string, db *storage.Badger, log zerolog.Logger, writeName bool) (*Topic, error) {
+	if writeName {
+		if err := db.Set([]byte(nameKey), []byte(name)); err != nil {
+			_ = db.Close()
+			return nil, errors.Wrapf(err, "topic %q: persist name", name)
+		}
+	}
+
+	offs := offsets.NewOffsets(db, log)
 	if err := offs.LoadFromStorage(); err != nil {
 		_ = db.Close()
 		return nil, errors.Wrapf(err, "topic %q: load offsets", name)
@@ -62,6 +85,7 @@ func New(name string, dataDir string, log zerolog.Logger) (*Topic, error) {
 	if err := t.loadSeq(); err != nil {
 		t.log.Warn().Err(err).Msg("topic: could not restore seq, starting at 0")
 	}
+	t.log.Info().Uint64("seq", t.CurrentSeq()).Msg("topic: ready")
 	return t, nil
 }
 
@@ -70,9 +94,6 @@ func (t *Topic) CurrentSeq() uint64        { return atomic.LoadUint64(&t.seq) }
 func (t *Topic) Offsets() *offsets.Offsets { return t.offsets }
 
 func (t *Topic) Close() error {
-	if err := t.offsets.Flush(); err != nil {
-		t.log.Error().Err(err).Msg("topic: flush offsets on close")
-	}
 	return t.db.Close()
 }
 

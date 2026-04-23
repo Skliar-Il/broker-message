@@ -132,6 +132,13 @@ func (s *session) handlePublish(pp *PublishPacket) error {
 
 func (s *session) handleSubscribe(ctx context.Context, sp *SubscribePacket) error {
 	retCodes := make([]byte, len(sp.Topics))
+	type pending struct {
+		t       *topic.Topic
+		topicFn string
+		msgCh   <-chan *topic.Message
+		catchUp []*topic.Message
+	}
+	pendings := make([]pending, 0, len(sp.Topics))
 
 	for i, tf := range sp.Topics {
 		t, err := s.registry.GetOrCreate(tf.Filter)
@@ -149,49 +156,73 @@ func (s *session) handleSubscribe(ctx context.Context, sp *SubscribePacket) erro
 
 		offs := t.Offsets()
 		offset := offs.Get(s.clientID)
+		var msgs []*topic.Message
 		if offset < t.CurrentSeq() {
-			msgs, err := t.GetMessages(offset+1, catchUpLimit)
+			ms, err := t.GetMessages(offset+1, catchUpLimit)
 			if err != nil {
-				s.log.Warn().Err(err).Str("topic", tf.Filter).Msg("session: catch-up failed")
+				s.log.Warn().Err(err).Str("topic", tf.Filter).Msg("session: catch-up fetch failed")
 			} else {
-				for _, m := range msgs {
-					m := m
-					if err := s.write(func() error {
-						return WritePublish(s.conn, m.Topic, m.Payload, 0, 0)
-					}); err != nil {
-						return err
-					}
-					offs.Set(s.clientID, m.Seq)
-				}
+				msgs = ms
 			}
 		}
 
-		go func(t *topic.Topic, topicName string, ch <-chan *topic.Message) {
-			toffs := t.Offsets()
+		pendings = append(pendings, pending{t: t, topicFn: tf.Filter, msgCh: msgCh, catchUp: msgs})
+
+		retCodes[i] = tf.QoS & 0x01
+		s.log.Info().
+			Str("filter", tf.Filter).
+			Uint8("qos", tf.QoS).
+			Int("catch_up", len(msgs)).
+			Uint64("from_offset", offset).
+			Uint64("current_seq", t.CurrentSeq()).
+			Msg("session: SUBSCRIBE ok")
+	}
+
+	if err := s.write(func() error { return WriteSubAck(s.conn, sp.PacketID, retCodes) }); err != nil {
+		return err
+	}
+
+	for _, p := range pendings {
+		offs := p.t.Offsets()
+		for _, m := range p.catchUp {
+			m := m
+			if err := s.write(func() error {
+				return WritePublish(s.conn, m.Topic, m.Payload, 0, 0)
+			}); err != nil {
+				return err
+			}
+			offs.Set(s.clientID, m.Seq)
+		}
+	}
+
+	for _, p := range pendings {
+		p := p
+		go func() {
+			toffs := p.t.Offsets()
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case msg, ok := <-ch:
+				case msg, ok := <-p.msgCh:
 					if !ok {
 						return
+					}
+					if msg.Seq <= toffs.Get(s.clientID) {
+						continue
 					}
 					if err := s.write(func() error {
 						return WritePublish(s.conn, msg.Topic, msg.Payload, 0, 0)
 					}); err != nil {
-						s.log.Warn().Err(err).Str("topic", topicName).Msg("session: delivery write error")
+						s.log.Warn().Err(err).Str("topic", p.topicFn).Msg("session: delivery write error")
 						return
 					}
-					toffs.Inc(s.clientID)
+					toffs.Set(s.clientID, msg.Seq)
 				}
 			}
-		}(t, tf.Filter, msgCh)
-
-		retCodes[i] = tf.QoS & 0x01
-		s.log.Info().Str("filter", tf.Filter).Uint8("qos", tf.QoS).Msg("session: SUBSCRIBE ok")
+		}()
 	}
 
-	return s.write(func() error { return WriteSubAck(s.conn, sp.PacketID, retCodes) })
+	return nil
 }
 
 func (s *session) handleUnsubscribe(up *UnsubscribePacket) error {

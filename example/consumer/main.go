@@ -5,12 +5,20 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 )
 
 const (
 	brokerAddr = "localhost:1883"
 	topicName  = "hello"
 )
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 func main() {
 	conn, err := net.Dial("tcp", brokerAddr)
@@ -19,7 +27,9 @@ func main() {
 	}
 	defer conn.Close()
 
-	if err := sendConnect(conn, "example-consumer"); err != nil {
+	clientID := envOr("CLIENT_ID", "example-consumer")
+	log.Printf("client_id=%s", clientID)
+	if err := sendConnect(conn, clientID); err != nil {
 		log.Fatalf("CONNECT: %v", err)
 	}
 	if err := readConnAck(conn); err != nil {
