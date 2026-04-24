@@ -21,14 +21,19 @@ func envOr(key, def string) string {
 }
 
 func main() {
+	qos := byte(0)
+	if envOr("QOS", "0") == "1" {
+		qos = 1
+	}
+	clientID := envOr("CLIENT_ID", "example-consumer")
+	log.Printf("consumer starting client_id=%s QoS=%d", clientID, qos)
+
 	conn, err := net.Dial("tcp", brokerAddr)
 	if err != nil {
 		log.Fatalf("dial: %v", err)
 	}
 	defer conn.Close()
 
-	clientID := envOr("CLIENT_ID", "example-consumer")
-	log.Printf("client_id=%s", clientID)
 	if err := sendConnect(conn, clientID); err != nil {
 		log.Fatalf("CONNECT: %v", err)
 	}
@@ -37,22 +42,31 @@ func main() {
 	}
 	log.Println("connected to broker")
 
-	if err := sendSubscribe(conn, topicName); err != nil {
+	if err := sendSubscribe(conn, topicName, qos); err != nil {
 		log.Fatalf("SUBSCRIBE: %v", err)
 	}
 	if err := readSubAck(conn); err != nil {
 		log.Fatalf("SUBACK: %v", err)
 	}
-	log.Printf("subscribed to %q, waiting for messages...\n", topicName)
+	log.Printf("subscribed to %q (QoS=%d), waiting for messages...\n", topicName, qos)
 
 	for {
-		pktType, payload, err := readPacket(conn)
+		pktType, flags, body, err := readPacketWithFlags(conn)
 		if err != nil {
 			log.Fatalf("read: %v", err)
 		}
-		if pktType == 3 {
-			topic, msg := parsePublish(payload)
-			fmt.Printf("[%s] %s\n", topic, msg)
+		if pktType != 3 {
+			continue
+		}
+
+		msgQoS := (flags >> 1) & 0x03
+		topic, msg, pid := parsePublish(body, msgQoS)
+		fmt.Printf("[%s] %s\n", topic, msg)
+
+		if msgQoS >= 1 && pid > 0 {
+			if err := sendPubAck(conn, pid); err != nil {
+				log.Fatalf("PUBACK: %v", err)
+			}
 		}
 	}
 }
@@ -89,13 +103,13 @@ func readConnAck(conn net.Conn) error {
 	return nil
 }
 
-func sendSubscribe(conn net.Conn, topic string) error {
+func sendSubscribe(conn net.Conn, topic string, qos byte) error {
 	tb := []byte(topic)
 	var body []byte
 	body = append(body, 0, 1)
 	body = append(body, byte(len(tb)>>8), byte(len(tb)))
 	body = append(body, tb...)
-	body = append(body, 0)
+	body = append(body, qos&0x03)
 
 	pkt := []byte{0x82}
 	pkt = append(pkt, encodeRemaining(len(body))...)
@@ -105,28 +119,37 @@ func sendSubscribe(conn net.Conn, topic string) error {
 }
 
 func readSubAck(conn net.Conn) error {
-	_, _, err := readPacket(conn)
+	_, _, _, err := readPacketWithFlags(conn)
 	return err
 }
 
-func readPacket(conn net.Conn) (byte, []byte, error) {
-	header := make([]byte, 1)
-	if _, err := readFull(conn, header); err != nil {
-		return 0, nil, err
-	}
-	pktType := header[0] >> 4
+func sendPubAck(conn net.Conn, pid uint16) error {
+	pkt := []byte{0x40, 0x02, byte(pid >> 8), byte(pid)}
+	_, err := conn.Write(pkt)
+	return err
+}
 
-	remaining, err := readRemainingLength(conn)
-	if err != nil {
-		return 0, nil, err
+func readPacketWithFlags(conn net.Conn) (pktType byte, flags byte, body []byte, err error) {
+	header := make([]byte, 1)
+	if _, err = readFull(conn, header); err != nil {
+		return
 	}
-	body := make([]byte, remaining)
+	pktType = header[0] >> 4
+	flags = header[0] & 0x0F
+
+	remaining, e := readRemainingLength(conn)
+	if e != nil {
+		err = e
+		return
+	}
+	body = make([]byte, remaining)
 	if remaining > 0 {
-		if _, err := readFull(conn, body); err != nil {
-			return 0, nil, err
+		if _, e := readFull(conn, body); e != nil {
+			err = e
+			return
 		}
 	}
-	return pktType, body, nil
+	return
 }
 
 func readRemainingLength(conn net.Conn) (int, error) {
@@ -148,17 +171,28 @@ func readRemainingLength(conn net.Conn) (int, error) {
 	return length, nil
 }
 
-func parsePublish(body []byte) (string, string) {
+func parsePublish(body []byte, qos byte) (string, string, uint16) {
 	if len(body) < 2 {
-		return "", ""
+		return "", "", 0
 	}
 	topicLen := int(binary.BigEndian.Uint16(body[:2]))
 	if 2+topicLen > len(body) {
-		return "", ""
+		return "", "", 0
 	}
 	topic := string(body[2 : 2+topicLen])
-	payload := string(body[2+topicLen:])
-	return topic, payload
+	pos := 2 + topicLen
+
+	var pid uint16
+	if qos > 0 {
+		if pos+2 > len(body) {
+			return topic, "", 0
+		}
+		pid = binary.BigEndian.Uint16(body[pos : pos+2])
+		pos += 2
+	}
+
+	payload := string(body[pos:])
+	return topic, payload, pid
 }
 
 func encodeRemaining(length int) []byte {

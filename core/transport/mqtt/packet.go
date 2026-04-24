@@ -63,10 +63,15 @@ type UnsubscribePacket struct {
 	Topics   []string
 }
 
+type PubAckPacket struct {
+	PacketID uint16
+}
+
 type Packet struct {
 	Type        byte
 	Connect     *ConnectPacket
 	Publish     *PublishPacket
+	PubAck      *PubAckPacket
 	Subscribe   *SubscribePacket
 	Unsubscribe *UnsubscribePacket
 }
@@ -106,6 +111,10 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 		}
 		pkt.Publish = pp
 	case TypePubAck:
+		if len(body) < 2 {
+			return nil, errors.New("PUBACK: body too short")
+		}
+		pkt.PubAck = &PubAckPacket{PacketID: binary.BigEndian.Uint16(body[0:2])}
 	case TypeSubscribe:
 		sp, err := parseSubscribe(body)
 		if err != nil {
@@ -321,8 +330,11 @@ func WriteConnAck(w io.Writer, sessionPresent bool, returnCode byte) error {
 	return errors.Wrap(err, "write CONNACK")
 }
 
-func WritePublish(w io.Writer, topicName string, payload []byte, qos byte, packetID uint16) error {
+func WritePublish(w io.Writer, topicName string, payload []byte, qos byte, packetID uint16, dup bool) error {
 	flags := qos << 1
+	if dup {
+		flags |= 0x08
+	}
 	varHeader := encodeString(topicName)
 	if qos > 0 {
 		varHeader = append(varHeader, byte(packetID>>8), byte(packetID))

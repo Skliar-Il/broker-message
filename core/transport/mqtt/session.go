@@ -6,29 +6,65 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/Skliar-Il/broker-message/core/topic"
 	"github.com/rs/zerolog"
 )
 
-const catchUpLimit = 500
+const (
+	catchUpLimit        = 500
+	retransmitTimeout   = 10 * time.Second
+	retransmitTickEvery = time.Second
+)
+
+type inflightMsg struct {
+	topicName string
+	seq       uint64
+	payload   []byte
+	qos       byte
+	sentAt    time.Time
+	topicRef  *topic.Topic
+}
 
 type session struct {
-	conn     net.Conn
-	connMu   sync.Mutex
-	clientID string
-	registry *Registry
-	subs     map[string]func()
-	subsMu   sync.Mutex
-	log      zerolog.Logger
+	conn       net.Conn
+	connMu     sync.Mutex
+	clientID   string
+	registry   *Registry
+	subs       map[string]func()
+	subsMu     sync.Mutex
+	subQoS     map[string]byte
+	inflight   map[uint16]*inflightMsg
+	inflightMu sync.Mutex
+	nextPktID  uint16
+	log        zerolog.Logger
 }
 
 func newSession(conn net.Conn, registry *Registry, log zerolog.Logger) *session {
 	return &session{
-		conn:     conn,
-		registry: registry,
-		subs:     make(map[string]func()),
-		log:      log.With().Str("remote", conn.RemoteAddr().String()).Logger(),
+		conn:      conn,
+		registry:  registry,
+		subs:      make(map[string]func()),
+		subQoS:    make(map[string]byte),
+		inflight:  make(map[uint16]*inflightMsg),
+		nextPktID: 1,
+		log:       log.With().Str("remote", conn.RemoteAddr().String()).Logger(),
+	}
+}
+
+func (s *session) allocPacketID() uint16 {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	for {
+		id := s.nextPktID
+		s.nextPktID++
+		if s.nextPktID == 0 {
+			s.nextPktID = 1
+		}
+		if _, used := s.inflight[id]; !used {
+			return id
+		}
 	}
 }
 
@@ -56,6 +92,8 @@ func (s *session) Handle(ctx context.Context) {
 		s.log.Error().Err(err).Msg("session: CONNECT handling failed")
 		return
 	}
+
+	go s.retransmitLoop(ctx)
 
 	for {
 		select {
@@ -85,7 +123,7 @@ func (s *session) dispatch(ctx context.Context, pkt *Packet) error {
 	case TypeUnsubscribe:
 		return s.handleUnsubscribe(pkt.Unsubscribe)
 	case TypePubAck:
-		return nil
+		return s.handlePubAck(pkt.PubAck)
 	case TypePingReq:
 		return s.write(func() error { return WritePingResp(s.conn) })
 	case TypeDisconnect:
@@ -117,6 +155,7 @@ func (s *session) handlePublish(pp *PublishPacket) error {
 		return fmt.Errorf("get topic %q: %w", pp.TopicName, err)
 	}
 	if err := t.Publish(pp.Payload); err != nil {
+		s.log.Error().Err(err).Str("topic", pp.TopicName).Uint8("qos", pp.QoS).Msg("session: PUBLISH persist failed")
 		return fmt.Errorf("publish to topic %q: %w", pp.TopicName, err)
 	}
 	s.log.Debug().
@@ -137,6 +176,7 @@ func (s *session) handleSubscribe(ctx context.Context, sp *SubscribePacket) erro
 		topicFn string
 		msgCh   <-chan *topic.Message
 		catchUp []*topic.Message
+		qos     byte
 	}
 	pendings := make([]pending, 0, len(sp.Topics))
 
@@ -147,11 +187,17 @@ func (s *session) handleSubscribe(ctx context.Context, sp *SubscribePacket) erro
 		}
 		msgCh, unsub := t.Subscribe()
 
+		effectiveQoS := tf.QoS
+		if effectiveQoS > 1 {
+			effectiveQoS = 1
+		}
+
 		s.subsMu.Lock()
 		if old, ok := s.subs[tf.Filter]; ok {
 			old()
 		}
 		s.subs[tf.Filter] = unsub
+		s.subQoS[tf.Filter] = effectiveQoS
 		s.subsMu.Unlock()
 
 		offs := t.Offsets()
@@ -166,12 +212,12 @@ func (s *session) handleSubscribe(ctx context.Context, sp *SubscribePacket) erro
 			}
 		}
 
-		pendings = append(pendings, pending{t: t, topicFn: tf.Filter, msgCh: msgCh, catchUp: msgs})
+		pendings = append(pendings, pending{t: t, topicFn: tf.Filter, msgCh: msgCh, catchUp: msgs, qos: effectiveQoS})
 
-		retCodes[i] = tf.QoS & 0x01
+		retCodes[i] = effectiveQoS
 		s.log.Info().
 			Str("filter", tf.Filter).
-			Uint8("qos", tf.QoS).
+			Uint8("qos", effectiveQoS).
 			Int("catch_up", len(msgs)).
 			Uint64("from_offset", offset).
 			Uint64("current_seq", t.CurrentSeq()).
@@ -186,12 +232,31 @@ func (s *session) handleSubscribe(ctx context.Context, sp *SubscribePacket) erro
 		offs := p.t.Offsets()
 		for _, m := range p.catchUp {
 			m := m
-			if err := s.write(func() error {
-				return WritePublish(s.conn, m.Topic, m.Payload, 0, 0)
-			}); err != nil {
-				return err
+			if p.qos == 1 {
+				pid := s.allocPacketID()
+				s.inflightMu.Lock()
+				s.inflight[pid] = &inflightMsg{
+					topicName: m.Topic,
+					seq:       m.Seq,
+					payload:   m.Payload,
+					qos:       1,
+					sentAt:    time.Now(),
+					topicRef:  p.t,
+				}
+				s.inflightMu.Unlock()
+				if err := s.write(func() error {
+					return WritePublish(s.conn, m.Topic, m.Payload, 1, pid, false)
+				}); err != nil {
+					return err
+				}
+			} else {
+				if err := s.write(func() error {
+					return WritePublish(s.conn, m.Topic, m.Payload, 0, 0, false)
+				}); err != nil {
+					return err
+				}
+				offs.Set(s.clientID, m.Seq)
 			}
-			offs.Set(s.clientID, m.Seq)
 		}
 	}
 
@@ -210,13 +275,33 @@ func (s *session) handleSubscribe(ctx context.Context, sp *SubscribePacket) erro
 					if msg.Seq <= toffs.Get(s.clientID) {
 						continue
 					}
-					if err := s.write(func() error {
-						return WritePublish(s.conn, msg.Topic, msg.Payload, 0, 0)
-					}); err != nil {
-						s.log.Warn().Err(err).Str("topic", p.topicFn).Msg("session: delivery write error")
-						return
+					if p.qos == 1 {
+						pid := s.allocPacketID()
+						s.inflightMu.Lock()
+						s.inflight[pid] = &inflightMsg{
+							topicName: msg.Topic,
+							seq:       msg.Seq,
+							payload:   msg.Payload,
+							qos:       1,
+							sentAt:    time.Now(),
+							topicRef:  p.t,
+						}
+						s.inflightMu.Unlock()
+						if err := s.write(func() error {
+							return WritePublish(s.conn, msg.Topic, msg.Payload, 1, pid, false)
+						}); err != nil {
+							s.log.Warn().Err(err).Str("topic", p.topicFn).Msg("session: delivery write error")
+							return
+						}
+					} else {
+						if err := s.write(func() error {
+							return WritePublish(s.conn, msg.Topic, msg.Payload, 0, 0, false)
+						}); err != nil {
+							s.log.Warn().Err(err).Str("topic", p.topicFn).Msg("session: delivery write error")
+							return
+						}
+						toffs.Set(s.clientID, msg.Seq)
 					}
-					toffs.Set(s.clientID, msg.Seq)
 				}
 			}
 		}()
@@ -225,12 +310,78 @@ func (s *session) handleSubscribe(ctx context.Context, sp *SubscribePacket) erro
 	return nil
 }
 
+func (s *session) handlePubAck(pa *PubAckPacket) error {
+	s.inflightMu.Lock()
+	msg, ok := s.inflight[pa.PacketID]
+	if ok {
+		delete(s.inflight, pa.PacketID)
+	}
+	s.inflightMu.Unlock()
+
+	if !ok {
+		s.log.Warn().Uint16("pid", pa.PacketID).Msg("session: PUBACK for unknown packet id")
+		return nil
+	}
+
+	msg.topicRef.Offsets().Set(s.clientID, msg.seq)
+	s.log.Debug().
+		Uint16("pid", pa.PacketID).
+		Uint64("seq", msg.seq).
+		Str("topic", msg.topicName).
+		Msg("session: PUBACK received, offset committed")
+	return nil
+}
+
+func (s *session) retransmitLoop(ctx context.Context) {
+	ticker := time.NewTicker(retransmitTickEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			s.inflightMu.Lock()
+			var toRetransmit []struct {
+				pid uint16
+				msg *inflightMsg
+			}
+			for pid, msg := range s.inflight {
+				if now.Sub(msg.sentAt) >= retransmitTimeout {
+					toRetransmit = append(toRetransmit, struct {
+						pid uint16
+						msg *inflightMsg
+					}{pid, msg})
+				}
+			}
+			s.inflightMu.Unlock()
+
+			for _, item := range toRetransmit {
+				item := item
+				if err := s.write(func() error {
+					return WritePublish(s.conn, item.msg.topicName, item.msg.payload, item.msg.qos, item.pid, true)
+				}); err != nil {
+					s.log.Warn().Err(err).Uint16("pid", item.pid).Msg("session: retransmit write error")
+					continue
+				}
+				s.inflightMu.Lock()
+				if m, ok := s.inflight[item.pid]; ok {
+					m.sentAt = time.Now()
+				}
+				s.inflightMu.Unlock()
+				s.log.Debug().Uint16("pid", item.pid).Uint64("seq", item.msg.seq).Msg("session: retransmitted with DUP=1")
+			}
+		}
+	}
+}
+
 func (s *session) handleUnsubscribe(up *UnsubscribePacket) error {
 	s.subsMu.Lock()
 	for _, topicName := range up.Topics {
 		if unsub, ok := s.subs[topicName]; ok {
 			unsub()
 			delete(s.subs, topicName)
+			delete(s.subQoS, topicName)
 			s.log.Info().Str("topic", topicName).Msg("session: UNSUBSCRIBE ok")
 		}
 	}
@@ -252,4 +403,9 @@ func (s *session) cleanupSubs() {
 		s.log.Debug().Str("topic", topicName).Msg("session: cleanup subscription")
 	}
 	s.subs = make(map[string]func())
+	s.subQoS = make(map[string]byte)
+
+	s.inflightMu.Lock()
+	s.inflight = make(map[uint16]*inflightMsg)
+	s.inflightMu.Unlock()
 }
