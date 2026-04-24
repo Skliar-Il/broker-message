@@ -17,9 +17,7 @@ producer(s)  ->  broker (RabbitMQ | Redis Streams)  ->  consumer(s)
 
 |  | RabbitMQ | Redis |
 |---|---|---|
-| durability | `queue durable=true`, persistent delivery | `XADD` без AOF/RDB (в docker-compose `--appendonly no`, `--save ""`) |
 | confirm delivery | `confirm mode` + блокирующее ожидание ack | `XADD` — write synchronous to server, без ACK отдельно |
-| consumer ack | manual ack per message | `XACK` батчем |
 | prefetch | `prefetch=256` | `COUNT=256` |
 | payload | одинаковые байты одинаковой длины | |
 | ресурсы | cpus=2, memory=1G | cpus=2, memory=1G |
