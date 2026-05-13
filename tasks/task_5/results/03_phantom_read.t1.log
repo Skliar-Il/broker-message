@@ -1,0 +1,26 @@
+=== T1 log: 03_phantom_read ===
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED
+--------------
+
+--------------
+BEGIN
+--------------
+
+--------------
+SELECT CONCAT('[T1] 1st count orders amount>100: ', COUNT(*)) AS info FROM orders WHERE amount>100
+--------------
+
+info
+[T1] 1st count orders amount>100: 0
+--------------
+SELECT CONCAT('[T1] 2nd count orders amount>100: ', COUNT(*), ' (phantom if > 0)') AS info FROM orders WHERE amount>100
+--------------
+
+info
+[T1] 2nd count orders amount>100: 1 (phantom if > 0)
+--------------
+COMMIT
+--------------
+

@@ -1,0 +1,26 @@
+=== T1 log: 02_non_repeatable_read ===
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED
+--------------
+
+--------------
+BEGIN
+--------------
+
+--------------
+SELECT CONCAT('[T1] 1st read: ', balance) AS info FROM accounts WHERE id=1
+--------------
+
+info
+[T1] 1st read: 100
+--------------
+SELECT CONCAT('[T1] 2nd read: ', balance, ' (non-repeatable if != 100)') AS info FROM accounts WHERE id=1
+--------------
+
+info
+[T1] 2nd read: 300 (non-repeatable if != 100)
+--------------
+COMMIT
+--------------
+

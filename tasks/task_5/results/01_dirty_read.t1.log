@@ -1,0 +1,26 @@
+=== T1 log: 01_dirty_read ===
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+BEGIN
+--------------
+
+--------------
+UPDATE accounts SET balance=999 WHERE id=1
+--------------
+
+--------------
+SELECT CONCAT('[T1] updated to 999, NOT committed yet') AS info
+--------------
+
+info
+[T1] updated to 999, NOT committed yet
+--------------
+ROLLBACK
+--------------
+
+--------------
+SELECT CONCAT('[T1] rolled back. committed balance: ', balance) AS info FROM accounts WHERE id=1
+--------------
+
+info
+[T1] rolled back. committed balance: 100

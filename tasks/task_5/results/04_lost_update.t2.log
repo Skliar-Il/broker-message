@@ -1,0 +1,32 @@
+=== T2 log: 04_lost_update ===
+mysql: [Warning] Using a password on the command line interface can be insecure.
+--------------
+BEGIN
+--------------
+
+--------------
+SELECT CONCAT('[T2] read balance: ', balance) AS info FROM accounts WHERE id=1
+--------------
+
+info
+[T2] read balance: 100
+--------------
+UPDATE accounts SET balance=80 WHERE id=1
+--------------
+
+--------------
+SELECT CONCAT('[T2] set balance=80, committing (overwrites T1!)') AS info
+--------------
+
+info
+[T2] set balance=80, committing (overwrites T1!)
+--------------
+COMMIT
+--------------
+
+--------------
+SELECT CONCAT('[T2] final balance: ', balance) AS info FROM accounts WHERE id=1
+--------------
+
+info
+[T2] final balance: 80

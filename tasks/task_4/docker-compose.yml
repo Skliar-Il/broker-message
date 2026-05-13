@@ -1,0 +1,17 @@
+services:
+  redis:
+    image: redis:7.2-alpine
+    container_name: cache_bench_redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
