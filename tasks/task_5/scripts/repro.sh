@@ -1,17 +1,4 @@
 #!/usr/bin/env bash
-# repro.sh — воспроизведение четырёх аномалий изоляции на MySQL 8 InnoDB.
-#
-# Использование:
-#   cd tasks/task_5
-#   docker compose up -d          # поднять контейнер (если ещё не запущен)
-#   bash scripts/repro.sh         # прогнать все сценарии
-#
-# Результаты:
-#   results/01_dirty_read.t1.log / .t2.log / .timeline.md
-#   results/02_non_repeatable.t1.log / ...
-#   results/03_phantom.t1.log / ...
-#   results/04_lost_update.t1.log / ...
-#   results/tables_after.txt
 
 set -euo pipefail
 
