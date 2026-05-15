@@ -1,0 +1,68 @@
+{
+  "title": "broker-message / Runtime",
+  "uid": "broker-runtime",
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": {"from": "now-30m", "to": "now"},
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Goroutines",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "go_goroutines", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Heap alloc",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "go_memstats_heap_alloc_bytes", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}}
+    },
+    {
+      "type": "stat",
+      "title": "Open FDs",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "targets": [{"expr": "process_open_fds", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Process CPU %",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "targets": [{"expr": "rate(process_cpu_seconds_total[1m]) * 100", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory (heap / sys / stack)",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 4},
+      "targets": [
+        {"expr": "go_memstats_heap_alloc_bytes", "legendFormat": "heap_alloc", "refId": "A"},
+        {"expr": "go_memstats_heap_sys_bytes", "legendFormat": "heap_sys", "refId": "B"},
+        {"expr": "go_memstats_stack_sys_bytes", "legendFormat": "stack_sys", "refId": "C"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "bytes"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "GC pause (p99)",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
+      "targets": [{"expr": "go_gc_duration_seconds{quantile=\"0.99\"}", "legendFormat": "p99", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Goroutines over time",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+      "targets": [{"expr": "go_goroutines", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Process resident memory",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 13},
+      "targets": [{"expr": "process_resident_memory_bytes", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}}
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

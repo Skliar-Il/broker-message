@@ -1,0 +1,39 @@
+services:
+  broker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: broker_message
+    ports:
+      - "1883:1883"
+      - "8883:8883"
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - broker_data:/app/storage
+      - ../config:/app/config:ro
+    environment:
+      - BROKER_CONFIG=/app/config/broker.yaml
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: broker_prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: broker_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+volumes:
+  broker_data:

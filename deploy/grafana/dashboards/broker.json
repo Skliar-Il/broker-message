@@ -1,0 +1,73 @@
+{
+  "title": "broker-message / Overview",
+  "uid": "broker-overview",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active connections",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "targets": [{"expr": "mqtt_connections_active", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Dedup cache size",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "targets": [{"expr": "broker_dedup_cache_size", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Inflight QoS1",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "targets": [{"expr": "mqtt_inflight_messages", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Topics tracked",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "targets": [{"expr": "count(broker_topic_seq)", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Publish rate (1m)",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "targets": [{"expr": "sum(rate(mqtt_publish_total[1m]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    },
+    {
+      "type": "stat",
+      "title": "Deliver rate (1m)",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "targets": [{"expr": "sum(rate(mqtt_deliver_total[1m]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Publish rate by topic",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 4},
+      "targets": [{"expr": "sum by (topic) (rate(mqtt_publish_total[1m]))", "legendFormat": "{{topic}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Deliver rate by topic",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
+      "targets": [{"expr": "sum by (topic) (rate(mqtt_deliver_total[1m]))", "legendFormat": "{{topic}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Connections over time",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+      "targets": [{"expr": "mqtt_connections_active", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Topic seq",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 13},
+      "targets": [{"expr": "broker_topic_seq", "legendFormat": "{{topic}}", "refId": "A"}]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

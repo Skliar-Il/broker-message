@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/Skliar-Il/broker-message/tasks/task_4/internal/metrics"
 	_ "modernc.org/sqlite"
@@ -64,20 +65,40 @@ func (s *SQLite) BatchSet(ctx context.Context, pairs map[string]string) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-	)
-	if err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	defer stmt.Close()
+	// Use multi-row UPSERT statements to persist many keys with fewer DB executions.
+	const maxPairsPerStmt = 400 // 400 * 2 placeholders keeps us safely under SQLite limits.
+	keys := make([]string, 0, len(pairs))
+	vals := make([]string, 0, len(pairs))
 	for k, v := range pairs {
-		s.metrics.DBSets.Add(1)
-		if _, err := stmt.ExecContext(ctx, k, v); err != nil {
+		keys = append(keys, k)
+		vals = append(vals, v)
+	}
+
+	for start := 0; start < len(keys); start += maxPairsPerStmt {
+		end := start + maxPairsPerStmt
+		if end > len(keys) {
+			end = len(keys)
+		}
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO kv (key, value) VALUES `)
+
+		args := make([]any, 0, (end-start)*2)
+		for i := start; i < end; i++ {
+			if i > start {
+				b.WriteString(", ")
+			}
+			b.WriteString("(?, ?)")
+			args = append(args, keys[i], vals[i])
+		}
+		b.WriteString(` ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+
+		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
+		// BatchSet counts physical DB write statements, not per-key updates.
+		s.metrics.DBSets.Add(1)
 	}
 	return tx.Commit()
 }

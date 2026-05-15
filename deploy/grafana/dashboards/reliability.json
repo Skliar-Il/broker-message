@@ -1,0 +1,77 @@
+{
+  "title": "broker-message / Reliability",
+  "uid": "broker-reliability",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": {"from": "now-30m", "to": "now"},
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Duplicates suppressed (5m)",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(increase(mqtt_publish_duplicates_total[5m])) or vector(0)", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Retransmits (5m)",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "sum(increase(mqtt_retransmit_total[5m])) or vector(0)", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Duplicate ratio",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "targets": [{
+        "expr": "(sum(rate(mqtt_publish_duplicates_total[5m])) / clamp_min(sum(rate(mqtt_publish_total[5m])), 1)) or vector(0)",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "percentunit"}}
+    },
+    {
+      "type": "stat",
+      "title": "Delivery error rate",
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "targets": [{
+        "expr": "(sum(rate(mqtt_deliver_total{result=\"error\"}[5m])) / clamp_min(sum(rate(mqtt_deliver_total[5m])), 1)) or vector(0)",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "percentunit"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Duplicates per topic",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 5},
+      "targets": [{"expr": "sum by (topic) (rate(mqtt_publish_duplicates_total[1m])) or on() vector(0)", "legendFormat": "{{topic}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Retransmits per topic",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 5},
+      "targets": [{"expr": "sum by (topic) (rate(mqtt_retransmit_total[1m])) or on() vector(0)", "legendFormat": "{{topic}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Inflight QoS1",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "targets": [{"expr": "mqtt_inflight_messages", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Publish results",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "targets": [{
+        "expr": "sum by (result) (rate(mqtt_publish_total[1m]))",
+        "legendFormat": "{{result}}",
+        "refId": "A"
+      }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Dedup cache size",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 22},
+      "targets": [{"expr": "broker_dedup_cache_size", "refId": "A"}]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

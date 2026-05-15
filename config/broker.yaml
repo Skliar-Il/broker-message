@@ -1,0 +1,14 @@
+mqtt_addr: ":1883"
+mqtt_tls_addr: ":8883"
+metrics_addr: ":9090"
+admin_addr: ":8080"
+topics_dir: storage/topics
+meta_dir: storage/meta
+users_file: config/users.yaml
+tls_cert: config/tls/server.pem
+tls_key: config/tls/server.key
+dedup_capacity: 100000
+dedup_ttl: 10m
+admin_user: admin
+admin_password: admin
+auth_required: true

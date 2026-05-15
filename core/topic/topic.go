@@ -7,8 +7,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Skliar-Il/broker-message/core/envelope"
 	"github.com/Skliar-Il/broker-message/core/offsets"
 	"github.com/Skliar-Il/broker-message/core/storage"
+	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 )
@@ -21,10 +23,18 @@ const (
 )
 
 type Message struct {
-	Seq       uint64
-	Topic     string
-	Payload   []byte
-	Timestamp time.Time
+	Seq           uint64
+	Topic         string
+	Payload       []byte
+	Timestamp     time.Time
+	IdempotencyID uuid.UUID
+	ServerMsgID   uuid.UUID
+	RawWire       []byte // full encoded envelope on disk
+}
+
+type PublishResult struct {
+	Msg       *Message
+	Duplicate bool
 }
 
 type subscriber struct {
@@ -92,6 +102,7 @@ func newFromDB(name string, db *storage.Badger, log zerolog.Logger, writeName bo
 func (t *Topic) Name() string              { return t.name }
 func (t *Topic) CurrentSeq() uint64        { return atomic.LoadUint64(&t.seq) }
 func (t *Topic) Offsets() *offsets.Offsets { return t.offsets }
+func (t *Topic) DB() *storage.Badger       { return t.db }
 
 func (t *Topic) Close() error {
 	return t.db.Close()
@@ -115,15 +126,19 @@ func (t *Topic) msgPrefix() []byte {
 	return []byte(msgKeyPrefix)
 }
 
-func encodeMessage(m *Message) []byte {
-	buf := make([]byte, 16+len(m.Payload))
-	binary.BigEndian.PutUint64(buf[0:8], m.Seq)
-	binary.BigEndian.PutUint64(buf[8:16], uint64(m.Timestamp.UnixNano()))
-	copy(buf[16:], m.Payload)
-	return buf
-}
-
-func decodeMessage(topicName string, raw []byte) (*Message, error) {
+func decodeStoredMessage(topicName string, raw []byte) (*Message, error) {
+	if env, ok := envelope.TryDecode(raw); ok {
+		return &Message{
+			Seq:           0, // filled by caller from key
+			Topic:         topicName,
+			Payload:       env.Payload,
+			Timestamp:     env.PublishTS,
+			IdempotencyID: env.IdempotencyID,
+			ServerMsgID:   env.ServerMsgID,
+			RawWire:       raw,
+		}, nil
+	}
+	// Legacy format: seq(8) + ts(8) + payload
 	if len(raw) < 16 {
 		return nil, errors.New("decode message: buffer too short")
 	}
@@ -132,23 +147,35 @@ func decodeMessage(topicName string, raw []byte) (*Message, error) {
 		Timestamp: time.Unix(0, int64(binary.BigEndian.Uint64(raw[8:16]))),
 		Topic:     topicName,
 		Payload:   make([]byte, len(raw)-16),
+		RawWire:   raw,
 	}
 	copy(m.Payload, raw[16:])
 	return m, nil
 }
 
-func (t *Topic) Publish(payload []byte) error {
+// Publish persists an envelope and fans out to subscribers.
+func (t *Topic) Publish(env envelope.Envelope) (*PublishResult, error) {
 	seq := atomic.AddUint64(&t.seq, 1)
 
+	serverID := env.ServerMsgID
+	if serverID == uuid.Nil {
+		serverID = uuid.Must(uuid.NewV7())
+	}
+	env = env.WithServerMsgID(serverID)
+	wire := env.Encode()
+
 	msg := &Message{
-		Seq:       seq,
-		Topic:     t.name,
-		Payload:   payload,
-		Timestamp: time.Now(),
+		Seq:           seq,
+		Topic:         t.name,
+		Payload:       env.Payload,
+		Timestamp:     env.PublishTS,
+		IdempotencyID: env.IdempotencyID,
+		ServerMsgID:   serverID,
+		RawWire:       wire,
 	}
 
-	if err := t.db.Set(t.msgKey(seq), encodeMessage(msg)); err != nil {
-		return errors.Wrap(err, "publish: persist message")
+	if err := t.db.Set(t.msgKey(seq), wire); err != nil {
+		return nil, errors.Wrap(err, "publish: persist message")
 	}
 	if err := t.db.SetUint64([]byte(seqKey), seq); err != nil {
 		t.log.Warn().Err(err).Uint64("seq", seq).Msg("publish: persist seq key failed")
@@ -164,8 +191,8 @@ func (t *Topic) Publish(payload []byte) error {
 	}
 	t.mu.RUnlock()
 
-	t.log.Debug().Uint64("seq", seq).Int("bytes", len(payload)).Msg("publish: ok")
-	return nil
+	t.log.Debug().Uint64("seq", seq).Str("server_msg_id", serverID.String()).Msg("publish: ok")
+	return &PublishResult{Msg: msg, Duplicate: false}, nil
 }
 
 func (t *Topic) Subscribe() (<-chan *Message, func()) {
@@ -202,10 +229,16 @@ func (t *Topic) GetMessages(fromSeq uint64, limit int) ([]*Message, error) {
 	prefix := t.msgPrefix()
 	msgs := make([]*Message, 0, limit)
 
-	err := t.db.ScanFrom(startKey, prefix, func(_, value []byte) error {
-		m, err := decodeMessage(t.name, value)
+	err := t.db.ScanFrom(startKey, prefix, func(key, value []byte) error {
+		m, err := decodeStoredMessage(t.name, value)
 		if err != nil {
 			return err
+		}
+		// extract seq from key
+		if len(key) >= len(msgKeyPrefix)+16 {
+			var seq uint64
+			fmt.Sscanf(string(key[len(msgKeyPrefix):]), "%016X", &seq)
+			m.Seq = seq
 		}
 		msgs = append(msgs, m)
 		if len(msgs) >= limit {
@@ -218,4 +251,23 @@ func (t *Topic) GetMessages(fromSeq uint64, limit int) ([]*Message, error) {
 	}
 
 	return msgs, nil
+}
+
+// Purge removes all messages and resets sequence (admin).
+func (t *Topic) Purge() error {
+	prefix := t.msgPrefix()
+	var keys [][]byte
+	_ = t.db.Scan(prefix, func(k, _ []byte) error {
+		dup := make([]byte, len(k))
+		copy(dup, k)
+		keys = append(keys, dup)
+		return nil
+	})
+	for _, k := range keys {
+		if err := t.db.Delete(k); err != nil {
+			return err
+		}
+	}
+	atomic.StoreUint64(&t.seq, 0)
+	return t.db.SetUint64([]byte(seqKey), 0)
 }

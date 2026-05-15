@@ -78,3 +78,85 @@ flowchart LR
 | `expires_at` | Для TTL, если включено |
 
 Поэтапный план работ — **[IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)**.
+
+---
+
+## Запуск стенда (брокер + Prometheus + Grafana)
+
+```bash
+make tls-dev          # self-signed TLS (опционально для :8883)
+make compose-up       # docker compose в deploy/
+# Admin UI:     http://localhost:8080  (admin / admin)
+# Prometheus:   http://localhost:9091
+# Grafana:      http://localhost:3000  (admin / admin)
+# MQTT plain:   localhost:1883
+# MQTT TLS:     localhost:8883
+```
+
+Локально без Docker:
+
+```bash
+make build && make run
+```
+
+Конфиг: [config/broker.yaml](config/broker.yaml), пользователи MQTT: [config/users.yaml](config/users.yaml).
+
+## Envelope и дедупликация (QoS 1)
+
+Клиенты SDK кодируют в `PUBLISH` payload **бинарный конверт** (см. `core/envelope`):
+
+| Поле | Размер | Назначение |
+|------|--------|------------|
+| magic | 4 | `BMQ1` |
+| version | 1 | `0x01` |
+| idempotency_id | 16 | UUID producer — повторная отправка с тем же id не создаёт второе сообщение |
+| server_msg_id | 16 | UUID брокера — при retransmit (DUP) тот же id; SDK consumer отбрасывает повтор |
+| publish_ts_ns | 8 | unix nano |
+| user_payload | rest | данные приложения |
+
+- **Producer dedup**: брокер хранит `idempotency_id` в LRU + Badger (TTL ~10 мин).
+- **Consumer dedup**: SDK ведёт LRU по `server_msg_id` (повторная доставка после timeout PUBACK не вызывает handler дважды).
+
+## Безопасность
+
+- **MQTTS** `:8883` — TLS (`config/tls/server.pem`, `server.key`; `make tls-dev`).
+- **CONNECT**: username/password + ACL по топикам (`config/users.yaml`).
+- Отказ: `ConnRefusedBadCredentials` / `ConnRefusedNotAuthorised`.
+
+## Метрики
+
+HTTP `:9090/metrics` — Prometheus counters/gauges: `mqtt_connections_active`, `mqtt_publish_total`, `mqtt_publish_duplicates_total`, `mqtt_deliver_total`, `mqtt_retransmit_total`, `mqtt_inflight_messages`, `broker_dedup_cache_size`.
+
+## Admin UI
+
+`:8080` — логин/пароль из `broker.yaml` (`admin_user` / `admin_password`).
+
+- обзор состояния, клиенты, топики, сообщения;
+- live tail (WebSocket `/api/topics/{name}/tail`);
+- replay диапазона (`POST /api/topics/{name}/replay?from=&to=`);
+- purge топика, graceful restart MQTT;
+- CSRF-токен после login для mutating API.
+
+## SDK
+
+**Go** — `sdk/go/brokermq`:
+
+```go
+client, _ := brokermq.Connect(ctx, "localhost:1883",
+    brokermq.WithCredentials("pub", "pub"),
+    brokermq.WithQoS(1),
+)
+_ = client.Publish(ctx, "hello", []byte("hi"))
+```
+
+Примеры: [example/publisher](example/publisher), [example/consumer](example/consumer).
+
+**Python** — `sdk/python` (`pip install -e ./sdk/python`):
+
+```python
+client = Client(username="sub", password="sub")
+await client.connect()
+await client.publish("hello", b"hi")
+async for topic, env in client.messages("hello"):
+    print(topic, env.payload)
+```

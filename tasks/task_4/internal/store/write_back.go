@@ -29,8 +29,9 @@ type WriteBack struct {
 	flushInterval time.Duration
 	batchSize     int
 
-	stopCh chan struct{}
-	doneCh chan struct{}
+	triggerCh chan struct{}
+	stopCh    chan struct{}
+	doneCh    chan struct{}
 }
 
 // WriteBackConfig holds tunable parameters for the flusher goroutine.
@@ -47,6 +48,7 @@ func NewWriteBack(c *cache.Redis, d *db.SQLite, m *metrics.M, cfg WriteBackConfi
 		dirty:         make(map[string]string),
 		flushInterval: cfg.FlushInterval,
 		batchSize:     cfg.BatchSize,
+		triggerCh:     make(chan struct{}, 1),
 		stopCh:        make(chan struct{}),
 		doneCh:        make(chan struct{}),
 	}
@@ -104,7 +106,7 @@ func (s *WriteBack) Set(ctx context.Context, key, value string) error {
 
 	// Trigger flush if batch threshold is reached.
 	if int(dirtyLen) >= s.batchSize {
-		s.triggerFlush(ctx)
+		s.triggerFlush()
 	}
 	return nil
 }
@@ -138,15 +140,22 @@ func (s *WriteBack) flusher() {
 		select {
 		case <-s.stopCh:
 			return
+		case <-s.triggerCh:
+			_ = s.flushDirty(context.Background())
 		case <-ticker.C:
 			_ = s.flushDirty(context.Background())
 		}
 	}
 }
 
-// triggerFlush performs a non-blocking flush outside the ticker.
-func (s *WriteBack) triggerFlush(ctx context.Context) {
-	go func() { _ = s.flushDirty(ctx) }()
+// triggerFlush notifies the single flusher goroutine.
+// The channel is buffered and sent in non-blocking mode so multiple Set calls
+// are coalesced into one flush signal instead of spawning many goroutines.
+func (s *WriteBack) triggerFlush() {
+	select {
+	case s.triggerCh <- struct{}{}:
+	default:
+	}
 }
 
 func (s *WriteBack) flushDirty(ctx context.Context) error {

@@ -1,0 +1,74 @@
+{
+  "title": "broker-message / Topics",
+  "uid": "broker-topics",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "topic",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(broker_topic_seq, topic)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "table",
+      "title": "Topics overview",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 0},
+      "targets": [{"expr": "broker_topic_seq", "format": "table", "instant": true, "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Topic seq",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0},
+      "targets": [{"expr": "broker_topic_seq{topic=~\"${topic:regex}\"}", "legendFormat": "{{topic}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Publish by topic / qos",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 9},
+      "targets": [{
+        "expr": "sum by (topic, qos) (rate(mqtt_publish_total{topic=~\"${topic:regex}\"}[1m]))",
+        "legendFormat": "{{topic}} qos={{qos}}",
+        "refId": "A"
+      }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Deliver by topic / qos",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 9},
+      "targets": [{
+        "expr": "sum by (topic, qos) (rate(mqtt_deliver_total{topic=~\"${topic:regex}\"}[1m]))",
+        "legendFormat": "{{topic}} qos={{qos}}",
+        "refId": "A"
+      }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Publish vs deliver per topic",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 18},
+      "targets": [
+        {
+          "expr": "sum by (topic) (rate(mqtt_publish_total{topic=~\"${topic:regex}\"}[1m]))",
+          "legendFormat": "pub {{topic}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (topic) (rate(mqtt_deliver_total{topic=~\"${topic:regex}\"}[1m]))",
+          "legendFormat": "del {{topic}}",
+          "refId": "B"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

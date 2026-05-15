@@ -2,12 +2,16 @@ package mqtt
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/Skliar-Il/broker-message/core/auth"
+	"github.com/Skliar-Il/broker-message/core/brokerhub"
 	"github.com/Skliar-Il/broker-message/core/topic"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -17,13 +21,15 @@ type Registry struct {
 	mu      sync.RWMutex
 	topics  map[string]*topic.Topic
 	baseDir string
+	hub     *brokerhub.Hub
 	log     zerolog.Logger
 }
 
-func NewRegistry(baseDir string, log zerolog.Logger) *Registry {
+func NewRegistry(baseDir string, hub *brokerhub.Hub, log zerolog.Logger) *Registry {
 	return &Registry{
 		topics:  make(map[string]*topic.Topic),
 		baseDir: baseDir,
+		hub:     hub,
 		log:     log.With().Str("component", "registry").Logger(),
 	}
 }
@@ -31,6 +37,14 @@ func NewRegistry(baseDir string, log zerolog.Logger) *Registry {
 func sanitizeTopicDir(name string) string {
 	r := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_")
 	return r.Replace(name)
+}
+
+func (r *Registry) Hub() *brokerhub.Hub { return r.hub }
+
+func (r *Registry) BaseDir() string { return r.baseDir }
+
+func (r *Registry) TopicDataDir(name string) string {
+	return filepath.Join(r.baseDir, sanitizeTopicDir(name))
 }
 
 func (r *Registry) Load() error {
@@ -69,10 +83,26 @@ func (r *Registry) Load() error {
 		}
 		r.topics[t.Name()] = t
 		loaded++
-		r.log.Info().Str("topic", t.Name()).Str("dir", dir).Uint64("seq", t.CurrentSeq()).Msg("registry: topic loaded from disk")
 	}
 	r.log.Info().Int("topics", loaded).Msg("registry: load complete")
 	return nil
+}
+
+func (r *Registry) ListTopics() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.topics))
+	for name := range r.topics {
+		out = append(out, name)
+	}
+	return out
+}
+
+func (r *Registry) Get(name string) (*topic.Topic, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	t, ok := r.topics[name]
+	return t, ok
 }
 
 func (r *Registry) GetOrCreate(name string) (*topic.Topic, error) {
@@ -114,62 +144,142 @@ func (r *Registry) Close() error {
 	return firstErr
 }
 
+type SessionInfo struct {
+	ClientID   string
+	RemoteAddr string
+	Username   string
+	Connected  time.Time
+	Topics     []string
+}
+
 type Server struct {
-	addr     string
-	listener net.Listener
-	registry *Registry
-	wg       sync.WaitGroup
-	connsMu  sync.Mutex
-	conns    map[net.Conn]struct{}
-	log      zerolog.Logger
+	addrPlain string
+	addrTLS   string
+	tlsConfig *tls.Config
+	registry  *Registry
+	auth      *auth.Store
+	authReq   bool
+	wg        sync.WaitGroup
+	sessMu    sync.RWMutex
+	sessions  map[*session]SessionInfo
+	log       zerolog.Logger
 }
 
-func NewServer(addr string, registry *Registry, log zerolog.Logger) *Server {
+func NewServer(addrPlain, addrTLS string, tlsCfg *tls.Config, registry *Registry, authStore *auth.Store, authRequired bool, log zerolog.Logger) *Server {
 	return &Server{
-		addr:     addr,
-		registry: registry,
-		conns:    make(map[net.Conn]struct{}),
-		log:      log.With().Str("component", "mqtt_server").Logger(),
+		addrPlain: addrPlain,
+		addrTLS:   addrTLS,
+		tlsConfig: tlsCfg,
+		registry:  registry,
+		auth:      authStore,
+		authReq:   authRequired,
+		sessions:  make(map[*session]SessionInfo),
+		log:       log.With().Str("component", "mqtt_server").Logger(),
 	}
 }
 
-func (s *Server) trackConn(c net.Conn) {
-	s.connsMu.Lock()
-	s.conns[c] = struct{}{}
-	s.connsMu.Unlock()
+func (s *Server) Registry() *Registry { return s.registry }
+
+func (s *Server) registerSession(sess *session, info SessionInfo) {
+	s.sessMu.Lock()
+	s.sessions[sess] = info
+	s.sessMu.Unlock()
 }
 
-func (s *Server) untrackConn(c net.Conn) {
-	s.connsMu.Lock()
-	delete(s.conns, c)
-	s.connsMu.Unlock()
-}
-
-func (s *Server) closeAllConns() int {
-	s.connsMu.Lock()
-	defer s.connsMu.Unlock()
-	n := len(s.conns)
-	for c := range s.conns {
-		_ = c.Close()
+func (s *Server) updateSessionIdentity(sess *session, clientID, username string) {
+	s.sessMu.Lock()
+	defer s.sessMu.Unlock()
+	info, ok := s.sessions[sess]
+	if !ok {
+		return
 	}
-	s.conns = make(map[net.Conn]struct{})
-	return n
+	info.ClientID = clientID
+	info.Username = username
+	s.sessions[sess] = info
+}
+
+func (s *Server) updateSessionTopics(sess *session, topics []string) {
+	s.sessMu.Lock()
+	defer s.sessMu.Unlock()
+	info, ok := s.sessions[sess]
+	if !ok {
+		return
+	}
+	info.Topics = topics
+	s.sessions[sess] = info
+}
+
+func (s *Server) unregisterSession(sess *session) {
+	s.sessMu.Lock()
+	delete(s.sessions, sess)
+	s.sessMu.Unlock()
+}
+
+func (s *Server) ListSessions() []SessionInfo {
+	s.sessMu.RLock()
+	defer s.sessMu.RUnlock()
+	out := make([]SessionInfo, 0, len(s.sessions))
+	for _, info := range s.sessions {
+		out = append(out, info)
+	}
+	return out
+}
+
+func (s *Server) KickClient(clientID string) int {
+	s.sessMu.Lock()
+	var kicked []*session
+	for sess, info := range s.sessions {
+		if info.ClientID == clientID {
+			kicked = append(kicked, sess)
+		}
+	}
+	s.sessMu.Unlock()
+	for _, sess := range kicked {
+		sess.Close()
+	}
+	return len(kicked)
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	ln, err := net.Listen("tcp", s.addr)
-	if err != nil {
-		return errors.Wrap(err, "listen")
-	}
-	s.listener = ln
-	s.log.Info().Str("addr", s.addr).Msg("server: listening for MQTT connections")
+	errCh := make(chan error, 2)
 
+	if s.addrPlain != "" {
+		go func() {
+			ln, err := net.Listen("tcp", s.addrPlain)
+			if err != nil {
+				errCh <- errors.Wrap(err, "listen plain")
+				return
+			}
+			s.log.Info().Str("addr", s.addrPlain).Msg("server: MQTT plain listening")
+			errCh <- s.serveListener(ctx, ln)
+		}()
+	}
+
+	if s.addrTLS != "" && s.tlsConfig != nil {
+		go func() {
+			ln, err := tls.Listen("tcp", s.addrTLS, s.tlsConfig)
+			if err != nil {
+				errCh <- errors.Wrap(err, "listen tls")
+				return
+			}
+			s.log.Info().Str("addr", s.addrTLS).Msg("server: MQTT TLS listening")
+			errCh <- s.serveListener(ctx, ln)
+		}()
+	}
+
+	select {
+	case <-ctx.Done():
+		s.wg.Wait()
+		return nil
+	case err := <-errCh:
+		return err
+	}
+}
+
+func (s *Server) serveListener(ctx context.Context, ln net.Listener) error {
 	go func() {
 		<-ctx.Done()
-		s.log.Info().Msg("server: shutdown signal received, closing listener and client connections")
 		_ = ln.Close()
-		n := s.closeAllConns()
-		s.log.Info().Int("closed_conns", n).Msg("server: client connections closed")
 	}()
 
 	for {
@@ -178,29 +288,31 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				s.wg.Wait()
-				s.log.Info().Msg("server: all sessions finished")
 				return nil
 			default:
-				s.log.Error().Err(err).Msg("server: accept error")
 				return errors.Wrap(err, "accept")
 			}
 		}
-
-		s.trackConn(conn)
 		s.wg.Add(1)
 		go func(c net.Conn) {
 			defer s.wg.Done()
-			defer s.untrackConn(c)
-			sess := newSession(c, s.registry, s.log)
+			sess := newSession(c, s, s.registry, s.auth, s.authReq, s.log)
+			s.registerSession(sess, SessionInfo{
+				RemoteAddr: c.RemoteAddr().String(),
+				Connected:  time.Now(),
+				Topics:     []string{},
+			})
+			defer s.unregisterSession(sess)
 			sess.Handle(ctx)
 		}(conn)
 	}
 }
 
 func (s *Server) Shutdown() {
-	if s.listener != nil {
-		_ = s.listener.Close()
+	s.sessMu.Lock()
+	for sess := range s.sessions {
+		sess.Close()
 	}
-	s.closeAllConns()
+	s.sessMu.Unlock()
 	s.wg.Wait()
 }

@@ -1,0 +1,155 @@
+# Демо-топология: 4 publisher + 5 consumer.
+#   demo/a : pub_a   -> sub_a1, sub_a2   (общий топик, 2 подписчика)
+#   demo/b : pub_b   -> sub_b            (1 на 1)
+#   demo/c : pub_c   -> sub_c            (1 на 1)
+#   demo/d : pub_d   -> sub_d            (1 на 1)
+#
+# Запуск:
+#   cd example/multi
+#   docker compose up --build
+#
+# Admin UI:   http://localhost:8080  (admin / admin)
+# Metrics:    http://localhost:9090/metrics
+# Prometheus: http://localhost:9091
+# Grafana:    http://localhost:3000  (admin / admin)
+
+x-app-image: &app-image
+  build:
+    context: ../..
+    dockerfile: example/multi/Dockerfile
+
+x-env-pub: &env-pub
+  BROKER_ADDR: broker:1883
+  MQTT_USER: pub
+  MQTT_PASS: pub
+  QOS: "1"
+
+x-env-sub: &env-sub
+  BROKER_ADDR: broker:1883
+  MQTT_USER: sub
+  MQTT_PASS: sub
+  QOS: "1"
+
+services:
+  broker:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    container_name: demo_broker
+    ports:
+      - "1883:1883"
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - broker_data:/app/storage
+      - ../../config:/app/config:ro
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: demo_prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on: [broker]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: demo_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ../../deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus]
+
+  # ── Publishers ───────────────────────────────────────────────
+  pub_a:
+    <<: *app-image
+    command: ["/app/pub"]
+    environment:
+      <<: *env-pub
+      CLIENT_ID: pub_a
+      TOPIC: demo/a
+    depends_on: [broker]
+
+  pub_b:
+    <<: *app-image
+    command: ["/app/pub"]
+    environment:
+      <<: *env-pub
+      CLIENT_ID: pub_b
+      TOPIC: demo/b
+    depends_on: [broker]
+
+  pub_c:
+    <<: *app-image
+    command: ["/app/pub"]
+    environment:
+      <<: *env-pub
+      CLIENT_ID: pub_c
+      TOPIC: demo/c
+    depends_on: [broker]
+
+  pub_d:
+    <<: *app-image
+    command: ["/app/pub"]
+    environment:
+      <<: *env-pub
+      CLIENT_ID: pub_d
+      TOPIC: demo/d
+    depends_on: [broker]
+
+  # ── Consumers ────────────────────────────────────────────────
+  # 2 на общем топике demo/a
+  sub_a1:
+    <<: *app-image
+    command: ["/app/cons"]
+    environment:
+      <<: *env-sub
+      CLIENT_ID: sub_a1
+      TOPIC: demo/a
+    depends_on: [broker]
+
+  sub_a2:
+    <<: *app-image
+    command: ["/app/cons"]
+    environment:
+      <<: *env-sub
+      CLIENT_ID: sub_a2
+      TOPIC: demo/a
+    depends_on: [broker]
+
+  # остальные 1-1
+  sub_b:
+    <<: *app-image
+    command: ["/app/cons"]
+    environment:
+      <<: *env-sub
+      CLIENT_ID: sub_b
+      TOPIC: demo/b
+    depends_on: [broker]
+
+  sub_c:
+    <<: *app-image
+    command: ["/app/cons"]
+    environment:
+      <<: *env-sub
+      CLIENT_ID: sub_c
+      TOPIC: demo/c
+    depends_on: [broker]
+
+  sub_d:
+    <<: *app-image
+    command: ["/app/cons"]
+    environment:
+      <<: *env-sub
+      CLIENT_ID: sub_d
+      TOPIC: demo/d
+    depends_on: [broker]
+
+volumes:
+  broker_data:
